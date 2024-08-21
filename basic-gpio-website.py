@@ -17,6 +17,7 @@ GPIO.setup(gpio_output, GPIO.OUT)
 
 # Track whether the button should be disabled
 is_disabled = False
+remaining_time = 0
 
 # HTML template with a dropdown for time options
 html_template = '''
@@ -40,21 +41,28 @@ html_template = '''
                     alert('GPIO pin 7 has been activated for ' + selectedTime + ' seconds!');
                     document.getElementById('control-button').disabled = true;
                     document.getElementById('time-select').disabled = true;
+                    updateRemainingTime();
                 } else {
                     alert(data.message);
                 }
             });
         }
 
-        // Poll every minute to check if the button is re-enabled
-        setInterval(() => {
-            fetch('/check-status')
+        // Update the remaining time every second
+        function updateRemainingTime() {
+            fetch('/remaining-time')
             .then(response => response.json())
             .then(data => {
-                document.getElementById('control-button').disabled = data.is_disabled;
-                document.getElementById('time-select').disabled = data.is_disabled;
+                if (data.remaining_time > 0) {
+                    document.getElementById('remaining-time').innerText = 'Remaining time: ' + data.remaining_time + ' seconds';
+                    setTimeout(updateRemainingTime, 1000);
+                } else {
+                    document.getElementById('remaining-time').innerText = '';
+                    document.getElementById('control-button').disabled = false;
+                    document.getElementById('time-select').disabled = false;
+                }
             });
-        }, 10000);  // Check every 10 seconds
+        }
     </script>
 </head>
 <body>
@@ -62,13 +70,13 @@ html_template = '''
     <label for="time-select">Select duration:</label>
     <select id="time-select" {{ 'disabled' if is_disabled else '' }}>
         <option value="10">10 seconds</option>
+        <option value="30">30 seconds</option>
         <option value="60">1 minute</option>
         <option value="300">5 minutes</option>
-        <option value="900">15 minutes</option>
-        <option value="1800">30 minutes</option>
         <option value="3600">1 hour</option>
     </select>
     <button id="control-button" onclick="activateGPIO()" {{ 'disabled' if is_disabled else '' }}>Activate GPIO Pin 7</button>
+    <p id="remaining-time"></p>
 </body>
 </html>
 '''
@@ -79,7 +87,7 @@ def index():
 
 @app.route('/activate', methods=['POST'])
 def activate():
-    global is_disabled
+    global is_disabled, remaining_time
     if is_disabled:
         return jsonify(success=False, message='The button is currently disabled. Please wait.')
 
@@ -91,18 +99,26 @@ def activate():
     GPIO.output(gpio_output, GPIO.HIGH)
     print(f'GPIO pin {gpio_output} is now ON for {duration} seconds')
     is_disabled = True
+    remaining_time = duration
 
     # Start a timer in a separate thread to disable GPIO after the selected duration
     def timer():
-        time.sleep(duration)  # Wait for the specified duration
+        global remaining_time, is_disabled
+        while remaining_time > 0:
+            time.sleep(1)
+            remaining_time -= 1
+
         GPIO.output(gpio_output, GPIO.LOW)
-        print(f'GPIO pin {gpio_output} is now OFF')
-        global is_disabled
+        print('GPIO pin ', gpio_output, ' is now OFF')
         is_disabled = False
 
     Thread(target=timer).start()
 
     return jsonify(success=True)
+
+@app.route('/remaining-time')
+def get_remaining_time():
+    return jsonify(remaining_time=remaining_time)
 
 @app.route('/check-status')
 def check_status():
